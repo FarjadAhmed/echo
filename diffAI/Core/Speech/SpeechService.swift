@@ -45,19 +45,31 @@ final class SpeechService: NSObject {
         synthesizer.stopSpeaking(at: .immediate)
     }
 
-    /// Voices that match the device language, for the Settings picker.
+    /// Voices that match the device language, best quality first, for the Settings picker.
     static func availableVoices() -> [AVSpeechSynthesisVoice] {
         let prefix = String(AVSpeechSynthesisVoice.currentLanguageCode().prefix(2))
         return AVSpeechSynthesisVoice.speechVoices()
-            .filter { $0.language.hasPrefix(prefix) }
-            .sorted { $0.name < $1.name }
+            .filter { $0.language.hasPrefix(prefix) && !$0.voiceTraits.contains(.isNoveltyVoice) }
+            .sorted { lhs, rhs in
+                lhs.quality.rawValue != rhs.quality.rawValue
+                    ? lhs.quality.rawValue > rhs.quality.rawValue
+                    : lhs.name < rhs.name
+            }
     }
+
+    /// The most natural voice installed for the device language: premium, then enhanced, then the default.
+    /// Better voices can be downloaded in Settings > Accessibility > Spoken Content > Voices.
+    static let bestVoice: AVSpeechSynthesisVoice? = {
+        let code = AVSpeechSynthesisVoice.currentLanguageCode()
+        let candidates = availableVoices()
+        return candidates.first { $0.language == code } ?? candidates.first ?? AVSpeechSynthesisVoice(language: code)
+    }()
 
     private func resolvedVoice() -> AVSpeechSynthesisVoice? {
         if let voiceIdentifier, let voice = AVSpeechSynthesisVoice(identifier: voiceIdentifier) {
             return voice
         }
-        return AVSpeechSynthesisVoice(language: AVSpeechSynthesisVoice.currentLanguageCode())
+        return Self.bestVoice
     }
 
     private func finish(token: UUID) {

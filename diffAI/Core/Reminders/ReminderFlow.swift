@@ -45,9 +45,15 @@ final class ReminderFlow: DialogFlow {
     // MARK: - Spoken formatting
 
     /// Lowercases the first letter so the title reads naturally mid-sentence.
+    /// "take my pills" is read back as "take your pills".
     private static func spokenTitle(_ title: String) -> String {
         guard let first = title.first else { return title }
-        return first.lowercased() + title.dropFirst()
+        let lowered = first.lowercased() + title.dropFirst()
+        let swaps = ["my": "your", "me": "you", "mine": "yours", "i": "you", "myself": "yourself"]
+        return lowered
+            .split(separator: " ", omittingEmptySubsequences: false)
+            .map { word in swaps[word.lowercased()] ?? String(word) }
+            .joined(separator: " ")
     }
 
     /// "at 8 PM every day", "today at 6:30 PM", "tomorrow at 9 AM", "on Thursday at 10 AM", or "on October 24 at 9 AM".

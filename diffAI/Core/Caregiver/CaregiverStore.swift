@@ -51,7 +51,7 @@ final class CaregiverStore: ObservableObject {
               UIApplication.shared.canOpenURL(url) else {
             return "I noted your check-in, but texts are not available on this device."
         }
-        UIApplication.shared.open(url, options: [:], completionHandler: nil)
+        ExternalApp.open(url)
         return "Messages is opening with a check-in to \(name). Tap Send there to send it."
     }
 

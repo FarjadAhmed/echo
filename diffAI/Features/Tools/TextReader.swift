@@ -19,8 +19,26 @@ enum TextReader {
                 return ""
             }
             let lines = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
-            return lines.joined(separator: ". ")
+            return TextReader.spoken(lines)
         }.value
+    }
+
+    /// Joins recognised lines into speakable text. A line that wraps mid-sentence ("not more than 4 in 24" /
+    /// "hours.") continues without a pause; a line followed by a new sentence ends with a period.
+    nonisolated static func spoken(_ lines: [String]) -> String {
+        var result = ""
+        for (index, raw) in lines.enumerated() {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty else { continue }
+            result += line
+            guard index < lines.count - 1 else { break }
+            let endsSentence = line.last.map { ".!?:;".contains($0) } ?? false
+            let nextStartsUpper = lines[index + 1].trimmingCharacters(in: .whitespaces).first?.isUppercase ?? false
+            result += (!endsSentence && nextStartsUpper) ? ". " : " "
+        }
+        let trimmed = result.trimmingCharacters(in: .whitespaces)
+        guard let last = trimmed.last else { return trimmed }
+        return ".!?".contains(last) ? trimmed : trimmed + "."
     }
 
     /// Maps the UIKit orientation of a photo to the one Vision expects.

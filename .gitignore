@@ -13,3 +13,6 @@ DerivedData/
 # Local secrets (the app stores the API key in the Keychain; never commit one)
 Secrets.swift
 *.env
+
+# Local key file built into the app (never commit: the repo is public)
+diffAI/Resources/Secrets.plist

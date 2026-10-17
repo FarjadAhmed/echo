@@ -103,7 +103,7 @@ final class AppSettings: ObservableObject {
         largeText = AppSettings.flag(defaults, Key.largeText, default: false)
         simpleMode = AppSettings.flag(defaults, Key.simpleMode, default: false)
         detailedAnswers = AppSettings.flag(defaults, Key.detailedAnswers, default: false)
-        useLiveAI = AppSettings.flag(defaults, Key.useLiveAI, default: false)
+        useLiveAI = AppSettings.flag(defaults, Key.useLiveAI, default: AIProvider.bundledKey != nil)
         hasCompletedOnboarding = AppSettings.flag(defaults, Key.hasCompletedOnboarding, default: false)
         hasHeardWelcome = AppSettings.flag(defaults, Key.hasHeardWelcome, default: false)
     }

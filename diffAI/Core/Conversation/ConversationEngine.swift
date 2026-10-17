@@ -75,6 +75,8 @@ final class ConversationEngine: ObservableObject {
     private var approvalCancelled: (() -> Void)?
     private var activeFlow: (any DialogFlow)?
     private var toolLoop: ToolLoop?
+    /// True while a spoken conversation is going: after each answer ECHO listens again.
+    private var handsFree = false
     private var lastAnswer = ""
     /// What the last photo showed, so follow-up questions still know about it.
     private var imageNote: String?
@@ -150,10 +152,12 @@ final class ConversationEngine: ObservableObject {
         }
     }
 
-    /// Starts the microphone, asking for permission first if it has never been asked.
+    /// Starts a hands-free conversation. Anything ECHO is saying stops first, so the microphone
+    /// never picks up ECHO's own voice. Asks for permission the first time.
     func beginListening() {
-        guard state == .idle else { return }
         errorMessage = nil
+        cancelCurrentTurn()
+        actions.stopReading()
         if permissions.voicePermissionsGranted {
             startListeningNow()
             return
@@ -161,7 +165,6 @@ final class ConversationEngine: ObservableObject {
         Task { [weak self] in
             guard let self else { return }
             let granted = await self.permissions.ensureVoicePermissions()
-            guard self.state == .idle else { return }
             if granted {
                 self.startListeningNow()
             } else {
@@ -177,30 +180,32 @@ final class ConversationEngine: ObservableObject {
             fail("I couldn't use the microphone. You can type instead.")
             return
         }
-        listener.start()
-        guard listener.isRunning else { return }
-        state = .listening
+        handsFree = true
+        if state == .listening {
+            syncMicrophone()
+        } else {
+            state = .listening
+        }
         resetIdleTimer()
     }
 
-    /// Big stop button and shake: cancel speech and any answer in progress. Listens again if the mic was on.
+    /// Big stop button, mic tap while ECHO talks, and shake: stop speech and any answer in progress,
+    /// then listen again if a conversation is going.
     func interrupt() {
         cancelCurrentTurn()
         toolLoop = nil
-        if listener.isRunning {
-            state = .listening
-            resetIdleTimer()
-        } else {
-            state = .idle
-        }
+        actions.stopReading()
+        state = handsFree ? .listening : .idle
+        if handsFree { resetIdleTimer() }
     }
 
     func shakeDetected() {
         if state != .idle { interrupt() }
     }
 
-    /// Stops speech, cancels answers and reading, and stops listening. Approval and dialogs stay.
+    /// Ends the conversation: stops speech, answers, reading and the microphone. Approvals and dialogs stay.
     func stopEverything(announce: String?) {
+        handsFree = false
         cancelCurrentTurn()
         toolLoop = nil
         actions.stopReading()
@@ -210,6 +215,16 @@ final class ConversationEngine: ObservableObject {
         state = .idle
         if let announce {
             Task { await speechOutput.say(announce) }
+        }
+    }
+
+    /// The microphone runs only while ECHO is listening. It is fully off while ECHO thinks or speaks,
+    /// so nothing ECHO says can be heard back as a request.
+    private func syncMicrophone() {
+        if state == .listening && handsFree {
+            if !listener.isRunning { listener.start() }
+        } else if listener.isRunning {
+            listener.stop()
         }
     }
 
@@ -351,29 +366,15 @@ final class ConversationEngine: ObservableObject {
     // MARK: - Listening callbacks
 
     private func handlePartial(_ text: String) {
+        guard state == .listening else { return }
         partialText = text
-        guard state != .idle else { return }
         idleTask?.cancel()
-        // Barge-in while ECHO speaks, only on headphones or AirPods: on the phone's speaker the
-        // microphone would hear ECHO's own voice. Tapping, Stop, and shaking always work.
-        guard state == .speaking, AudioSession.hasPrivateOutputRoute else { return }
-        if text.split(separator: " ").count >= 2 {
-            interrupt()
-        }
     }
 
     private func handleUtterance(_ text: String) {
         partialText = ""
-        switch state {
-        case .listening:
-            process(text)
-        case .thinking:
-            // The user added something while ECHO was still working: start over with the new request.
-            cancelCurrentTurn()
-            process(text)
-        case .speaking, .idle:
-            break
-        }
+        guard state == .listening else { return }
+        process(text)
     }
 
     // MARK: - Turn handling
@@ -683,11 +684,15 @@ final class ConversationEngine: ObservableObject {
             if ai is MockAIService {
                 speakSentence("Sorry, I could not finish that answer. Please try again.", turn: id)
             } else {
-                // Live AI failed: say why in one short sentence, then answer from the offline demo for this turn.
-                let reason = (error as? RemoteAIError)?.spokenDescription ?? "I could not reach the live assistant."
-                speakSentence("\(reason) Here is a demo answer instead.", turn: id)
-                await streamAnswer(id: id, ai: fallbackAI, messages: messages, context: context, depth: Self.maxToolDepth)
-                return
+                // Live AI failed: say why in one short sentence and show the exact reason on screen.
+                let remote = error as? RemoteAIError
+                let reason = remote?.spokenDescription
+                    ?? ((error as? URLError) != nil ? "I could not connect to the internet." : "I could not reach the live assistant.")
+                let detail = remote?.detail ?? error.localizedDescription
+                RemoteAIDiagnostics.lastError = detail
+                errorMessage = "Live AI: \(detail)"
+                haptics.error()
+                speakSentence("\(reason) Please try again.", turn: id)
             }
         }
 
@@ -812,9 +817,10 @@ final class ConversationEngine: ObservableObject {
         }
     }
 
+    /// After ECHO finishes speaking: back to listening in a conversation, otherwise ready.
     private func finishTurn(_ id: UUID) {
         guard id == turn else { return }
-        if listener.isRunning {
+        if handsFree {
             state = .listening
             resetIdleTimer()
         } else {
@@ -841,15 +847,17 @@ final class ConversationEngine: ObservableObject {
     private func resetIdleTimer() {
         idleTask?.cancel()
         idleTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 25_000_000_000)
-            guard !Task.isCancelled, let self, self.state == .listening else { return }
-            self.stopEverything(announce: "I have stopped listening. Tap the microphone to talk again.")
+            try? await Task.sleep(nanoseconds: 30_000_000_000)
+            guard !Task.isCancelled, let self, self.state == .listening, self.partialText.isEmpty else { return }
+            // Quietly stop after a long silence; the "stopped listening" sound and haptic say so.
+            self.stopEverything(announce: nil)
         }
     }
 
     private func fail(_ message: String) {
         errorMessage = message
         haptics.error()
+        handsFree = false
         listener.stop()
         state = .idle
         Task { await speechOutput.say(message) }
@@ -904,15 +912,20 @@ final class ConversationEngine: ObservableObject {
         guard state != old else { return }
         switch state {
         case .listening:
-            listener.unmute()
-            if old == .idle { haptics.listeningStarted() }
+            // The "your turn" sound plays first, then the microphone opens.
+            haptics.listeningStarted()
         case .thinking:
             haptics.thinking()
         case .speaking:
-            // The microphone stays open for barge-in, but nothing it hears becomes a request.
-            listener.mute()
+            break
         case .idle:
             if old != .idle { haptics.listeningStopped() }
+        }
+        // Switch the microphone on the next main-actor turn, outside this property observer.
+        if state == .listening {
+            Task { @MainActor [weak self] in self?.syncMicrophone() }
+        } else {
+            syncMicrophone()
         }
     }
 

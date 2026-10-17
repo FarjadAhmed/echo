@@ -51,7 +51,7 @@ final class EmergencyService: ObservableObject {
         guard let url = Self.telURL(phone), UIApplication.shared.canOpenURL(url) else {
             return "Calls are not available on this device."
         }
-        UIApplication.shared.open(url, options: [:], completionHandler: nil)
+        ExternalApp.open(url)
         prepareFollowUp()
         return "Calling \(name)."
     }
@@ -82,7 +82,7 @@ final class EmergencyService: ObservableObject {
               UIApplication.shared.canOpenURL(url) else {
             return "Texts are not available on this device."
         }
-        UIApplication.shared.open(url, options: [:], completionHandler: nil)
+        ExternalApp.open(url)
         return "Messages is opening with your text to \(caregiverName). Tap Send there to send it."
     }
 

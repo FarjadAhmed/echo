@@ -12,14 +12,76 @@ enum RemoteAIError: LocalizedError {
         switch self {
         case .missingKey:
             return "There is no API key saved. You can add one in Settings."
-        case .badStatus(401, _), .badStatus(403, _):
+        case .badStatus(401, _):
             return "Your API key was not accepted. Please check it in Settings."
+        case .badStatus(403, _):
+            return "Your API key is not allowed to use the live assistant. Please check it in Settings."
         case .badStatus(429, _), .badStatus(529, _):
             return "The live assistant is busy right now."
+        case .badStatus(400, _):
+            return "The live assistant could not accept that request."
         case .badStatus, .badResponse, .apiError:
             return "I could not reach the live assistant."
         }
     }
+
+    /// The exact reason, for Settings and the error card.
+    var detail: String {
+        switch self {
+        case .missingKey: return "No API key saved."
+        case .badStatus(let code, let message): return "HTTP \(code)\(message.isEmpty ? "" : ": \(message)")"
+        case .badResponse: return "The response could not be read."
+        case .apiError(let message): return message
+        }
+    }
+}
+
+/// What the account behind the key accepts. Starts at `.full`; when the API rejects an optional feature
+/// (beta extras, web search, or the model), ECHO steps down one level and remembers the level that works,
+/// so a key from any account still works.
+enum RemoteAICompatibility: Int, Comparable {
+    /// Opus 5.5, web search and fetch, refusal fallback, reasoning-binding control.
+    case full = 0
+    /// Without the beta extras.
+    case noBetas = 1
+    /// Without web search and fetch.
+    case noWebTools = 2
+    /// On Sonnet 5.5 instead of Opus 5.5.
+    case otherModel = 3
+
+    static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+
+    private static let key = "remoteAICompatibility"
+
+    @MainActor static var current: RemoteAICompatibility {
+        get { RemoteAICompatibility(rawValue: UserDefaults.standard.integer(forKey: key)) ?? .full }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: key) }
+    }
+
+    /// Called when a new key is saved: try everything again.
+    @MainActor static func reset() { current = .full }
+
+    var next: RemoteAICompatibility? { RemoteAICompatibility(rawValue: rawValue + 1) }
+
+    var model: String { self == .otherModel ? "claude-sonnet-5-5" : "claude-opus-5-5" }
+    var usesBetas: Bool { self == .full }
+    var usesWebTools: Bool { self <= .noBetas }
+
+    var summary: String {
+        switch self {
+        case .full: return "\(model) with web search"
+        case .noBetas: return "\(model) with web search (without beta features)"
+        case .noWebTools: return "\(model) without web search"
+        case .otherModel: return "\(model) without web search"
+        }
+    }
+}
+
+/// The last live-AI outcome, shown in Settings so problems can be diagnosed on the phone.
+@MainActor
+enum RemoteAIDiagnostics {
+    static var lastError: String?
+    static var lastSuccess: Date?
 }
 
 /// Live AI through the Anthropic Messages API: streaming, tool calls, and photos.
@@ -28,7 +90,6 @@ enum RemoteAIError: LocalizedError {
 /// The system prompt and tool list are byte-identical on every request, and conversation history is
 /// append-only, so the model's reasoning blocks stay valid across a tool loop and prompt caching works.
 struct RemoteAIService: AIService {
-    static let model = "claude-opus-5-5"
     static let endpoint = URL(string: "https://api.anthropic.com/v1/messages")!
     /// Server-side refusal fallback, plus the control that drops (rather than rejects) a reasoning block
     /// if the history ever differs from the one that produced it.
@@ -54,8 +115,10 @@ struct RemoteAIService: AIService {
 
     static let systemPrompt = """
     You are ECHO, a calm voice assistant for blind, low-vision and elderly people. Everything you write is \
-    spoken aloud by a screen reader, so answer briefly in plain spoken sentences: no markdown, headings, \
-    lists, bullet points, symbols or emojis. Describe where things are with clock positions or left and right. \
+    spoken aloud. Always give a brief, straightforward answer: answer the question directly in one to three \
+    short sentences, with the most important thing first, unless the user asks for more. Use plain spoken \
+    language: no markdown, headings, lists, bullet points, symbols or emojis. Do not greet the user \
+    again after the first turn. Describe where things are with clock positions or left and right. \
     Ask one question at a time. Say when you are unsure. Never read passwords, card numbers or codes aloud. \
     Use a tool when the user asks for something the app can do, such as looking through the camera, \
     reading a web page, sending a message, setting a reminder, or calling someone. For questions about \
@@ -73,11 +136,7 @@ struct RemoteAIService: AIService {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    var request = try makeRequest(body: Self.chatBody(messages: messages, context: context))
-                    request.setValue("text/event-stream", forHTTPHeaderField: "accept")
-                    request.timeoutInterval = 120
-                    let (bytes, response) = try await URLSession.shared.bytes(for: request)
-                    try await Self.checkStatus(response, bodyLines: bytes)
+                    let bytes = try await openStream(messages: messages, context: context)
 
                     var collector = BlockCollector()
                     for try await line in bytes.lines {
@@ -174,12 +233,43 @@ struct RemoteAIService: AIService {
 
     // MARK: - Requests
 
+    /// Opens the streaming request, stepping down the compatibility level if the account rejects a feature.
+    private func openStream(messages: [ChatMessage], context: AssistantContext) async throws -> URLSession.AsyncBytes {
+        while true {
+            let level = RemoteAICompatibility.current
+            var request = try makeRequest(body: Self.chatBody(messages: messages, context: context, level: level), level: level)
+            request.setValue("text/event-stream", forHTTPHeaderField: "accept")
+            request.timeoutInterval = 120
+            do {
+                let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                try await Self.checkStatus(response, bodyLines: bytes)
+                Self.recordSuccess()
+                return bytes
+            } catch let error as RemoteAIError {
+                guard Self.shouldStepDown(error), let next = level.next else { throw Self.recordFailure(error) }
+                RemoteAICompatibility.current = next
+            }
+        }
+    }
+
     /// One-shot (non-streaming) request, used for photos and summaries.
     private func complete(text: String, image: UIImage?) async throws -> String {
-        var request = try makeRequest(body: Self.completionBody(text: text, image: image))
-        request.timeoutInterval = 90
-        let (data, response) = try await URLSession.shared.data(for: request)
-        try Self.checkStatus(response, body: data)
+        var data = Data()
+        while true {
+            let level = RemoteAICompatibility.current
+            var request = try makeRequest(body: Self.completionBody(text: text, image: image, level: level), level: level)
+            request.timeoutInterval = 90
+            do {
+                let (body, response) = try await URLSession.shared.data(for: request)
+                try Self.checkStatus(response, body: body)
+                Self.recordSuccess()
+                data = body
+                break
+            } catch let error as RemoteAIError {
+                guard Self.shouldStepDown(error), let next = level.next else { throw Self.recordFailure(error) }
+                RemoteAICompatibility.current = next
+            }
+        }
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let content = object["content"] as? [[String: Any]] else {
             throw RemoteAIError.badResponse
@@ -194,19 +284,71 @@ struct RemoteAIService: AIService {
         return answer
     }
 
-    private func makeRequest(body: [String: Any]) throws -> URLRequest {
+    /// Console API keys start with "sk-ant-api". Anything else from Anthropic (for example "sk-ant-oat" or
+    /// "sk-ant-usr") is a login token, which must be sent as a Bearer token instead of an x-api-key.
+    static func isLoginToken(_ key: String) -> Bool {
+        key.hasPrefix("sk-ant-") && !key.hasPrefix("sk-ant-api")
+    }
+
+    /// A rejected request (bad request, not allowed, or model not found) may be an optional feature the
+    /// account cannot use. A bad key (401), rate limits and outages are not retried this way.
+    private static func shouldStepDown(_ error: RemoteAIError) -> Bool {
+        guard case .badStatus(let code, let message) = error, code == 400 || code == 403 || code == 404 else { return false }
+        // Problems with the key or workspace are not about features: dropping features would not help.
+        let lowered = message.lowercased()
+        let credentialWords = ["api key", "x-api-key", "workspace", "authentication", "token", "credential", "organization"]
+        return !credentialWords.contains { lowered.contains($0) }
+    }
+
+    private static func recordSuccess() {
+        RemoteAIDiagnostics.lastError = nil
+        RemoteAIDiagnostics.lastSuccess = Date()
+    }
+
+    private static func recordFailure(_ error: RemoteAIError) -> RemoteAIError {
+        RemoteAIDiagnostics.lastError = error.detail
+        return error
+    }
+
+    /// A tiny request to check the key, used by Settings. Returns a sentence to show and speak.
+    static func testConnection(apiKey: String) async -> (ok: Bool, message: String) {
+        let service = RemoteAIService(apiKey: apiKey)
+        do {
+            _ = try await service.complete(text: "Reply with the single word OK.", image: nil)
+            return (true, "Connected. Using \(RemoteAICompatibility.current.summary).")
+        } catch let error as RemoteAIError {
+            return (false, "\(error.spokenDescription) Details: \(error.detail)")
+        } catch {
+            return (false, "Could not connect: \(error.localizedDescription)")
+        }
+    }
+
+    private func makeRequest(body: [String: Any], level: RemoteAICompatibility) throws -> URLRequest {
         var request = URLRequest(url: Self.endpoint)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         switch auth {
-        case .apiKey(let key):
+        case .apiKey(let raw):
+            let key = raw.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "\"'")))
             guard !key.isEmpty else { throw RemoteAIError.missingKey }
-            request.setValue(key, forHTTPHeaderField: "x-api-key")
-            request.setValue(Self.betaHeader, forHTTPHeaderField: "anthropic-beta")
+            if Self.isLoginToken(key) {
+                // A login (OAuth) token, such as one from `ant auth login`, goes as a Bearer token with the OAuth beta.
+                // A user-level token also has to name the workspace to bill.
+                request.setValue("Bearer \(key)", forHTTPHeaderField: "authorization")
+                request.setValue(level.usesBetas ? Self.betaHeader + ",oauth-2025-04-20" : "oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
+                if let workspace = AIProvider.bundledWorkspaceID {
+                    request.setValue(workspace, forHTTPHeaderField: "anthropic-workspace-id")
+                }
+            } else {
+                request.setValue(key, forHTTPHeaderField: "x-api-key")
+                if level.usesBetas {
+                    request.setValue(Self.betaHeader, forHTTPHeaderField: "anthropic-beta")
+                }
+            }
         case .bearer(let token):
             request.setValue("Bearer \(token)", forHTTPHeaderField: "authorization")
-            request.setValue(Self.betaHeader + ",oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
+            request.setValue(level.usesBetas ? Self.betaHeader + ",oauth-2025-04-20" : "oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
         }
         // Sorted keys keep the request prefix identical across turns, which the model's reasoning binding requires.
         request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
@@ -241,18 +383,21 @@ struct RemoteAIService: AIService {
 
     // MARK: - Bodies
 
-    static func chatBody(messages: [ChatMessage], context: AssistantContext) -> [String: Any] {
-        [
-            "model": model,
+    static func chatBody(messages: [ChatMessage], context: AssistantContext, level: RemoteAICompatibility) -> [String: Any] {
+        var body: [String: Any] = [
+            "model": level.model,
             "max_tokens": 8000,
             "stream": true,
-            "fallbacks": "default",
             "output_config": ["effort": "low"],
-            "thinking": ["type": "adaptive", "block_binding": ["prefix_mismatch_behavior": "drop_block"]],
             "system": systemPrompt,
-            "tools": AssistantAction.toolDefinitions + serverTools,
+            "tools": AssistantAction.toolDefinitions + (level.usesWebTools ? serverTools : []),
             "messages": prepared(messages, context: context).map(messageJSON),
         ]
+        if level.usesBetas {
+            body["fallbacks"] = "default"
+            body["thinking"] = ["type": "adaptive", "block_binding": ["prefix_mismatch_behavior": "drop_block"]]
+        }
+        return body
     }
 
     /// Anthropic-hosted tools: live web search, and reading a web page found by the search or named by the user.
@@ -262,15 +407,18 @@ struct RemoteAIService: AIService {
         ["type": "web_fetch_20260209", "name": "web_fetch", "max_uses": 2],
     ]
 
-    static func completionBody(text: String, image: UIImage?) -> [String: Any] {
-        [
-            "model": model,
+    static func completionBody(text: String, image: UIImage?, level: RemoteAICompatibility) -> [String: Any] {
+        var body: [String: Any] = [
+            "model": level.model,
             "max_tokens": 4000,
-            "fallbacks": "default",
             "output_config": ["effort": "low"],
             "system": systemPrompt,
             "messages": [messageJSON(ChatMessage(role: .user, text: text, image: image))],
         ]
+        if level.usesBetas {
+            body["fallbacks"] = "default"
+        }
+        return body
     }
 
     /// Puts the history into the shape the API requires, deterministically, so the same transcript

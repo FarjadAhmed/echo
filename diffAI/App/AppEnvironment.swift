@@ -43,6 +43,10 @@ final class AppEnvironment {
         let emergency = EmergencyService()
         let caregiver = CaregiverStore()
 
+        // Every launch starts from the full live-AI setup, so a downgrade caused by a temporary or
+        // since-fixed problem (such as a missing workspace header) never sticks.
+        RemoteAICompatibility.reset()
+
         // Live AI when a key is saved and the toggle is on; the offline demo otherwise. Decided per turn.
         let makeAIService: () -> any AIService = { AIProvider.current(settings: settings) }
 

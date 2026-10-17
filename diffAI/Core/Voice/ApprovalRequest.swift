@@ -43,7 +43,9 @@ struct ApprovalRequest: Identifiable, Equatable {
     var spokenText: String {
         var parts = [summary]
         for row in rows {
-            parts.append("\(row.label): \(row.value).")
+            let value = row.value.trimmingCharacters(in: .whitespacesAndNewlines)
+            let ends = value.last.map { ".!?".contains($0) } ?? false
+            parts.append("\(row.label): \(value)\(ends ? "" : ".")")
         }
         if let caution {
             parts.append(caution)

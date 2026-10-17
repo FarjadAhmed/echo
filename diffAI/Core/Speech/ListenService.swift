@@ -21,21 +21,20 @@ final class RecognitionRequestBox: @unchecked Sendable {
     }
 }
 
-/// Continuous microphone recognition with pause detection.
-/// Calls onPartial while the user speaks and onUtteranceEnd after a pause.
+/// Microphone recognition with pause detection. Calls onPartial while the user speaks and
+/// onUtteranceEnd after a pause.
 ///
-/// While ECHO itself is speaking the service is muted: it keeps the microphone open for barge-in
-/// detection but never turns what it hears into a request, so the app cannot obey its own voice.
+/// The conversation engine runs this only while it is listening: it is stopped completely while
+/// ECHO thinks or speaks, so the microphone can never hear ECHO's own voice.
 @MainActor
 final class ListenService: ObservableObject {
     private(set) var isRunning = false
-    private(set) var isMuted = false
 
     var onPartial: ((String) -> Void)?
     var onUtteranceEnd: ((String) -> Void)?
     var onFailure: ((String) -> Void)?
-    /// Length of pause that ends an utterance.
-    var silenceSeconds: Double = 1.0
+    /// Length of pause that ends an utterance. Generous, because people pause mid-sentence.
+    var silenceSeconds: Double = 1.3
 
     private let recognizer: SFSpeechRecognizer?
     private let audioEngine = AVAudioEngine()
@@ -44,25 +43,20 @@ final class ListenService: ObservableObject {
     private var silenceTask: Task<Void, Never>?
     private var generation = 0
     private var transcript = ""
-    private var consecutiveFailures = 0
-    /// Results before this moment are leftovers from the app's own speech and are ignored.
-    private var ignoreUntil = Date.distantPast
     private var routeObserver: NSObjectProtocol?
-    private var configObserver: NSObjectProtocol?
 
     init(locale: Locale = .current) {
         recognizer = SFSpeechRecognizer(locale: locale) ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
 
-        // Headphones plugged in or AirPods connected: the engine's input changes, so start over.
+        // Only a real device change (headphones in or out, AirPods connecting) needs a restart.
+        // Category and option changes also post this notification, and restarting on those causes a loop.
         routeObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in self?.restartAfterRouteChange() }
-        }
-        configObserver = NotificationCenter.default.addObserver(
-            forName: .AVAudioEngineConfigurationChange, object: audioEngine, queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in self?.restartAfterRouteChange() }
+        ) { [weak self] notification in
+            let raw = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt ?? 0
+            let reason = AVAudioSession.RouteChangeReason(rawValue: raw)
+            guard reason == .newDeviceAvailable || reason == .oldDeviceUnavailable else { return }
+            Task { @MainActor in self?.restartForNewRoute() }
         }
     }
 
@@ -80,10 +74,6 @@ final class ListenService: ObservableObject {
         }
 
         let input = audioEngine.inputNode
-        // Echo cancellation, so the microphone hears less of the phone's own speaker. Best effort.
-        if !input.isVoiceProcessingEnabled {
-            try? input.setVoiceProcessingEnabled(true)
-        }
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else {
             onFailure?("The microphone is not available right now. You can type instead.")
@@ -106,9 +96,7 @@ final class ListenService: ObservableObject {
         }
 
         isRunning = true
-        isMuted = false
-        consecutiveFailures = 0
-        ignoreUntil = Date().addingTimeInterval(0.3)
+        transcript = ""
         startRecognitionTask()
     }
 
@@ -116,7 +104,6 @@ final class ListenService: ObservableObject {
     func stop() {
         guard isRunning else { return }
         isRunning = false
-        isMuted = false
         silenceTask?.cancel()
         silenceTask = nil
         generation += 1
@@ -128,34 +115,12 @@ final class ListenService: ObservableObject {
         transcript = ""
     }
 
-    /// Called while ECHO speaks or thinks. Partial text still flows (for barge-in) but nothing is sent as a request.
-    func mute() {
-        guard isRunning, !isMuted else { return }
-        isMuted = true
-        silenceTask?.cancel()
-        silenceTask = nil
-        transcript = ""
-    }
-
-    /// Called when ECHO finishes speaking. Discards whatever the recognizer buffered meanwhile.
-    func unmute() {
-        guard isRunning, isMuted else { return }
-        isMuted = false
-        transcript = ""
-        ignoreUntil = Date().addingTimeInterval(0.5)
-        restartRecognitionTask()
-    }
-
-    private func restartAfterRouteChange() {
+    private func restartForNewRoute() {
         guard isRunning else { return }
-        let wasMuted = isMuted
         stop()
         Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 400_000_000)
-            guard let self, !self.isRunning else { return }
-            try? AudioSession.activateConversation()
-            self.start()
-            if wasMuted { self.mute() }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            self?.start()
         }
     }
 
@@ -163,6 +128,9 @@ final class ListenService: ObservableObject {
         guard let recognizer, isRunning else { return }
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
+        if #available(iOS 16, *) {
+            request.addsPunctuation = true
+        }
         requestBox.set(request)
         let current = generation
         task = recognizer.recognitionTask(with: request) { @Sendable [weak self] result, error in
@@ -185,32 +153,19 @@ final class ListenService: ObservableObject {
     private func handle(text: String?, isFinal: Bool, failed: Bool, generation current: Int) {
         guard isRunning, current == generation else { return }
 
-        if failed && transcript.isEmpty {
-            consecutiveFailures += 1
-            if consecutiveFailures >= 4 {
-                stop()
-                onFailure?("I couldn't hear anything clearly. Tap the microphone to try again, or type instead.")
-            } else {
-                restartRecognitionTask()
-            }
-            return
-        }
-
         if let text, !text.isEmpty {
-            consecutiveFailures = 0
-            if isMuted {
-                // Only for barge-in detection; never becomes a request.
-                onPartial?(text)
-                return
-            }
-            guard Date() >= ignoreUntil else { return }
             transcript = text
             onPartial?(text)
             scheduleSilenceEnd()
         }
 
-        if !isMuted, isFinal || failed {
-            endUtterance()
+        if isFinal || failed {
+            if transcript.isEmpty {
+                // "No speech detected" and request time limits are normal while waiting; just keep listening.
+                restartRecognitionTask()
+            } else {
+                endUtterance()
+            }
         }
     }
 
@@ -219,7 +174,7 @@ final class ListenService: ObservableObject {
         let seconds = silenceSeconds
         silenceTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-            guard !Task.isCancelled, let self, !self.isMuted, !self.transcript.isEmpty else { return }
+            guard !Task.isCancelled, let self, !self.transcript.isEmpty else { return }
             self.endUtterance()
         }
     }

@@ -11,8 +11,22 @@ struct SettingsView: View {
     /// Loaded in `.task`, because the first call to the system voice list is slow.
     @State private var voices: [AVSpeechSynthesisVoice] = []
     @State private var apiKey = ""
-    @State private var hasKey = KeychainStore.read(account: KeychainStore.anthropicKeyAccount) != nil
+    @State private var hasKey = AIProvider.activeKey != nil
     @State private var confirmReset = false
+    @State private var isTesting = false
+    @State private var connectionResult: (ok: Bool, message: String)?
+
+    private func testConnection() {
+        guard let key = AIProvider.activeKey else { return }
+        isTesting = true
+        connectionResult = nil
+        Task {
+            let result = await RemoteAIService.testConnection(apiKey: key)
+            connectionResult = result
+            isTesting = false
+            await speechOutput.say(result.ok ? "Live AI is connected." : result.message)
+        }
+    }
 
     var body: some View {
         Form {
@@ -125,14 +139,19 @@ struct SettingsView: View {
                     .accessibilityHint("Paste your key. It is stored in the Keychain on this device only")
                     .settingsRow()
                 Button {
-                    hasKey = KeychainStore.save(apiKey.trimmingCharacters(in: .whitespacesAndNewlines),
-                                                account: KeychainStore.anthropicKeyAccount)
+                    let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                    hasKey = KeychainStore.save(key, account: KeychainStore.anthropicKeyAccount)
                     apiKey = ""
+                    guard hasKey else { return }
+                    // A new key gets a fresh start, live AI is switched on, and the key is checked right away.
+                    RemoteAICompatibility.reset()
+                    settings.useLiveAI = true
+                    testConnection()
                 } label: {
                     Label("Save key", systemImage: "key.fill")
                 }
                 .disabled(apiKey.trimmingCharacters(in: .whitespaces).isEmpty)
-                .accessibilityHint("Saves the key you pasted to the Keychain")
+                .accessibilityHint("Saves the key you pasted to the Keychain, turns on live AI, and tests the connection")
                 .settingsRow()
                 if hasKey {
                     Label {
@@ -143,9 +162,38 @@ struct SettingsView: View {
                             .accessibilityHidden(true)
                     }
                     .settingsRow()
+
+                    Button(action: testConnection) {
+                        if isTesting {
+                            Label("Testing…", systemImage: "antenna.radiowaves.left.and.right")
+                        } else {
+                            Label("Test connection", systemImage: "antenna.radiowaves.left.and.right")
+                        }
+                    }
+                    .disabled(isTesting)
+                    .accessibilityHint("Sends a tiny request to check the key and says the result")
+                    .settingsRow()
+
+                    if let connectionResult {
+                        Label {
+                            Text(connectionResult.message)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .textSelection(.enabled)
+                        } icon: {
+                            Image(systemName: connectionResult.ok ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                                .foregroundStyle(connectionResult.ok ? Theme.success : Color(.systemRed))
+                                .accessibilityHidden(true)
+                        }
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel(connectionResult.ok ? "Connection working. \(connectionResult.message)" : "Connection problem. \(connectionResult.message)")
+                        .settingsRow()
+                    }
+
                     Button(role: .destructive) {
                         KeychainStore.delete(account: KeychainStore.anthropicKeyAccount)
+                        RemoteAICompatibility.reset()
                         hasKey = false
+                        connectionResult = nil
                     } label: {
                         Label("Remove key", systemImage: "trash")
                     }

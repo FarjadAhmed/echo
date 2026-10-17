@@ -1,20 +1,26 @@
 import AVFoundation
 
-/// Audio session setup for speaking and listening at the same time.
+/// One audio session for the whole app, set up once and left alone.
+/// Changing the category or options mid-conversation is what makes speech cut out, so this never does.
 enum AudioSession {
-    /// Plays speech and records the microphone. Safe to call repeatedly.
+    private static var isConfigured = false
+
+    /// Plays speech loudly through the speaker (or headphones) and allows recording.
+    /// Not silenced by the ring/silent switch, because blind users depend on hearing ECHO.
     static func activateConversation() throws {
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(
-            .playAndRecord,
-            mode: .default,
-            options: [.defaultToSpeaker, .duckOthers, .allowBluetoothHFP, .allowBluetoothA2DP]
-        )
+        if !isConfigured {
+            try session.setCategory(
+                .playAndRecord,
+                mode: .default,
+                options: [.defaultToSpeaker, .allowBluetoothHFP, .allowBluetoothA2DP]
+            )
+            isConfigured = true
+        }
         try session.setActive(true)
     }
 
     /// True when speech plays through headphones, AirPods or another private route.
-    /// Only then can the microphone hear the user over the app's own voice without echo.
     static var hasPrivateOutputRoute: Bool {
         let privatePorts: [AVAudioSession.Port] = [.headphones, .bluetoothA2DP, .bluetoothHFP, .bluetoothLE, .usbAudio, .lineOut]
         return AVAudioSession.sharedInstance().currentRoute.outputs.contains { privatePorts.contains($0.portType) }

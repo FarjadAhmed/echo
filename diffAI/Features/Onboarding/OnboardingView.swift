@@ -195,6 +195,8 @@ struct OnboardingView: View {
     }
 
     private func finish() {
+        // Onboarding already welcomed the user; Home should not speak a second welcome on top.
+        settings.hasHeardWelcome = true
         settings.hasCompletedOnboarding = true
     }
 

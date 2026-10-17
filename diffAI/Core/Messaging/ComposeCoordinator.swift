@@ -58,7 +58,7 @@ final class ComposeCoordinator: ObservableObject {
         }
 
         if let url = fallbackURL(kind, to: card, body: body, subject: subject), UIApplication.shared.canOpenURL(url) {
-            UIApplication.shared.open(url, options: [:], completionHandler: nil)
+            ExternalApp.open(url)
             return "I opened \(kind.appName) with your \(kind.spokenWord) to \(card.name). Tap Send there to send it."
         }
 

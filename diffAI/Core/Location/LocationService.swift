@@ -48,12 +48,12 @@ final class LocationService: NSObject, ObservableObject, CLLocationManagerDelega
         }
 
         guard let location = await requestOneLocation() else {
-            return "I could not find your location right now. Please try again in a moment. \(Self.demoLandmarks)"
+            return "I could not find your location right now. Please try again in a moment."
         }
 
         let place = await describe(location)
         lastKnownDescription = place
-        return "You are near \(place). \(Self.demoLandmarks)"
+        return "You are near \(place)."
     }
 
     // MARK: - Permission

@@ -34,7 +34,7 @@ enum LiveSelfTest {
             ("web search", [.say("What is the weather in Berlin today?")]),
             ("call with approval", [.say("Please call Mom."), .say("yes")]),
             ("call declined", [.say("Call Dr. Meyer for me."), .say("no")]),
-            ("text with message", [.say("Text Neighbor Anna saying I will be ten minutes late."), .say("polish"), .say("yes"), .say("yes")]),
+            ("text with message", [.say("Text Neighbor Anna saying I will be ten minutes late."), .say("yes"), .say("yes")]),
             ("text asking for details", [.say("I want to send an email."), .say("Mom"), .say("Lunch on Sunday sounds lovely."), .say("yes"), .say("yes")]),
             ("reminder", [.say("Remind me to take my pills at 8 pm every day.")]),
             ("reminder needing a time", [.say("Remind me to water the plants."), .say("tomorrow at 9 in the morning")]),
@@ -49,8 +49,10 @@ enum LiveSelfTest {
             ("voice only switch", [.say("voice only"), .say("show the screen")]),
         ]
 
+        // ECHO_TEST_QUICK=1 runs only the first few scenarios, for a fast connection check.
+        let quick = ProcessInfo.processInfo.environment["ECHO_TEST_QUICK"] == "1"
         var failures = 0
-        for (name, steps) in scenarios {
+        for (name, steps) in (quick ? Array(scenarios.prefix(4)) : scenarios) {
             log("")
             log("=== \(name)")
             for step in steps {

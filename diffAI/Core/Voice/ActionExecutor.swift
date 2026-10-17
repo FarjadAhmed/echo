@@ -371,7 +371,7 @@ final class ActionExecutor {
         guard let url = EmergencyService.telURL(phone), UIApplication.shared.canOpenURL(url) else {
             return "Calls are not available on this device."
         }
-        UIApplication.shared.open(url)
+        ExternalApp.open(url)
         caregiver.log("Called \(name)")
         return "Calling \(name)."
     }

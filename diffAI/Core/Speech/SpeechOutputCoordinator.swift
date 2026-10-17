@@ -74,14 +74,17 @@ final class SpeechOutputCoordinator: ObservableObject {
         if usesVoiceOver {
             await announce(clean)
         } else {
+            // Loud through the speaker, and not silenced by the ring switch.
+            try? AudioSession.activateConversation()
             speech.rate = settings.effectiveSpeechRate * rateScale
             speech.voiceIdentifier = settings.voiceIdentifier
             await speech.speak(clean)
         }
     }
 
-    /// Announces a newly opened screen. Under VoiceOver this is a screen-changed notification,
-    /// which also resets VoiceOver focus to the top of the new screen.
+    /// Announces a newly opened screen to VoiceOver users (it also moves VoiceOver focus to the top).
+    /// Without VoiceOver nothing is spoken: the screen is visible, and spoken screen names
+    /// interrupted conversations and were picked up by the microphone.
     func announceScreen(_ text: String) async {
         #if DEBUG
         if LiveSelfTest.isRunning {
@@ -91,8 +94,6 @@ final class SpeechOutputCoordinator: ObservableObject {
         #endif
         if usesVoiceOver {
             UIAccessibility.post(notification: .screenChanged, argument: text)
-        } else {
-            await say(text)
         }
     }
 

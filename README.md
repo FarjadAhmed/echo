@@ -4,6 +4,17 @@
 
 Before anything with consequences (a call, a message, a form submission) ECHO shows and speaks exactly what it will do and waits for your yes.
 
+## Screenshots
+
+<p align="center">
+  <img src="screenshots/IMG_9438.PNG" width="200" alt="Home screen: a list of features with colored icons: Camera, Web, Messages, Reminders, My Day, Safety, Tools and Caregiver.">
+  <img src="screenshots/IMG_9439.PNG" width="200" alt="A conversation: the user asks for a reminder to go out for football tomorrow and ECHO confirms it while speaking.">
+  <img src="screenshots/IMG_9441.PNG" width="200" alt="The approval screen: ECHO shows the form it is about to submit and asks the user to confirm, change the details, or cancel.">
+  <img src="screenshots/IMG_9442.PNG" width="200" alt="The web assistant showing a live finance website, with demo sites and a 'What can I do here?' button.">
+</p>
+
+More screens are in the [screenshots](screenshots) folder.
+
 ## Features
 
 - **Conversation:** hands-free, streamed answers spoken sentence by sentence. Interrupt by tapping, saying stop, or shaking the phone.

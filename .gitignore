@@ -1,0 +1,15 @@
+# Xcode per-user state
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+
+# Build output
+build/
+DerivedData/
+
+# macOS
+.DS_Store
+
+# Local secrets (the app stores the API key in the Keychain; never commit one)
+Secrets.swift
+*.env

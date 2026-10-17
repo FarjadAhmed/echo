@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Demo Pharmacy (fake shop for testing)</title>
+  <style>
+    body { font-family: -apple-system, sans-serif; font-size: 20px; margin: 0; color: #111; background: #fafafa; }
+    header, footer { background: #0a6e9e; color: white; padding: 16px; }
+    nav a { color: white; margin-right: 16px; }
+    main { padding: 16px; }
+    .product { background: white; border: 1px solid #ddd; border-radius: 12px; padding: 16px; margin: 12px 0; }
+    button, input { font-size: 20px; padding: 10px; margin: 6px 0; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Demo Pharmacy</h1>
+    <nav aria-label="Main">
+      <a href="#search">Search</a>
+      <a href="#cart">Cart</a>
+      <a href="#login">Log in</a>
+    </nav>
+  </header>
+  <main>
+    <p>This is a fake pharmacy for testing ECHO. No real orders are placed.</p>
+    <form id="search" role="search" aria-label="Search medicines">
+      <label for="q">Search medicines</label><br>
+      <input id="q" name="q" type="search" placeholder="Search medicines">
+      <button type="submit">Search</button>
+    </form>
+    <h2>Popular products</h2>
+    <section class="product">
+      <h3>Pain relief tablets</h3>
+      <p>Pack of 24. Price 6 dollars.</p>
+      <button type="button">Add to cart</button>
+    </section>
+    <section class="product">
+      <h3>Vitamin C chewable</h3>
+      <p>Pack of 60. Price 9 dollars.</p>
+      <button type="button">Add to cart</button>
+    </section>
+    <section class="product">
+      <h3>Cough syrup</h3>
+      <p>Bottle of 200 millilitres. Price 7 dollars.</p>
+      <button type="button">Add to cart</button>
+    </section>
+    <h2 id="cart">Your cart</h2>
+    <p>Your cart is empty.</p>
+    <h2 id="login">Log in</h2>
+    <form aria-label="Log in">
+      <label for="user">Email</label><br>
+      <input id="user" name="email" type="email"><br>
+      <label for="pass">Password</label><br>
+      <input id="pass" name="password" type="password"><br>
+      <button type="submit">Log in</button>
+    </form>
+  </main>
+  <footer>Demo only. Not a real pharmacy.</footer>
+</body>
+</html>

@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Demo Clinic Appointment Form (fake form for testing)</title>
+  <style>
+    body { font-family: -apple-system, sans-serif; font-size: 20px; margin: 0; padding: 16px; color: #111; }
+    label { display: block; margin-top: 16px; font-weight: 600; }
+    input, select { font-size: 20px; padding: 10px; width: 100%; box-sizing: border-box; }
+    button { font-size: 22px; padding: 14px 20px; margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <h1>Book an appointment</h1>
+  <p>This is a demo form. Nothing is booked.</p>
+  <form action="#" method="get" aria-label="Appointment booking">
+    <label for="name">Your name</label>
+    <input id="name" name="name" type="text" autocomplete="name">
+    <label for="phone">Phone number</label>
+    <input id="phone" name="phone" type="tel" autocomplete="tel">
+    <label for="day">Preferred day</label>
+    <select id="day" name="day">
+      <option>Monday</option>
+      <option>Tuesday</option>
+      <option>Wednesday</option>
+      <option>Thursday</option>
+      <option>Friday</option>
+    </select>
+    <label for="reason">Reason for visit</label>
+    <input id="reason" name="reason" type="text" placeholder="For example, a check-up">
+    <button type="submit">Book appointment</button>
+  </form>
+</body>
+</html>
